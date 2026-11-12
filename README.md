@@ -50,8 +50,11 @@ leaf                  # library of recent books
 | `o` | open file | open file |
 | `q` | quit | quit |
 
-Reading positions and settings live in `~/.local/state/leaf/library.json`.
-Set `LEAF_DEBUG=1` to print the page's console messages.
+Reading positions and settings live in a SQLite database,
+`~/.local/state/leaf/leaf.db`. Books are identified by their EPUB identifier (or a hash
+of the file when they have none), so moving or renaming a book keeps your place, and
+several leaf windows can save at the same time. Set `LEAF_DEBUG=1` to print the page's
+console messages.
 
 ## Layout
 
@@ -59,8 +62,18 @@ Set `LEAF_DEBUG=1` to print the page's console messages.
 |---|---|
 | `leaf` | GTK window; serves `app/`, `foliate-js/` and the open book over a private `leaf://` scheme |
 | `app/` | reader and library pages (HTML, CSS, JS) |
+| `store.py` | SQLite storage: schema, numbered migrations, progress and settings |
+| `tests/` | storage tests (`python -m unittest discover -s tests`) |
 | `foliate-js/` | submodule, pinned to a known-good commit |
 | `data/leaf.desktop` | desktop entry (`application/epub+zip`) |
+
+## Storage
+
+`store.py` owns the schema. Each change is a numbered migration in `MIGRATIONS`,
+tracked with SQLite's `user_version`; add a new one for a change and leave applied
+ones alone. Version 1 has `books`, `settings`, and an `annotations` table for
+highlights, notes and bookmarks, which nothing uses yet. A `library.json` from
+leaf's first version is imported on start, keeping whichever position is newer.
 
 ## License
 

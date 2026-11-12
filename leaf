@@ -6,7 +6,7 @@
 Keys (in the reader): ←/→ h/l space  page · t contents · +/- text size ·
 d paper/ink · s page sound · b library · o open file · q quit
 
-State: ~/.local/state/leaf/library.json (positions, settings)
+State: ~/.local/state/leaf/leaf.db (SQLite; see store.py for the schema)
 Files: app/ and foliate-js/ next to this script (symlinks are followed),
        or $LEAF_HOME if set. foliate-js is MIT-licensed, by John Factotum.
 """
@@ -27,39 +27,30 @@ from gi.repository import Gio, GLib, Gtk, WebKit2  # noqa: E402
 
 HOME = Path.home()
 SHARE = Path(os.environ.get("LEAF_HOME") or Path(__file__).resolve().parent)
-STATE = HOME / ".local/state/leaf/library.json"
+STATE_DIR = HOME / ".local/state/leaf"
+DB = STATE_DIR / "leaf.db"
+LEGACY_JSON = STATE_DIR / "library.json"       # leaf's first format, imported on start
 ROOTS = {"app": SHARE / "app", "foliate": SHARE / "foliate-js"}
-DEFAULT_SETTINGS = {"theme": "paper", "fontSize": 19, "pageSound": False}
 TAP = HOME / ".config/pomo/tap.wav"
+
+sys.path.insert(0, str(SHARE))
+from store import Store  # noqa: E402
 
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 mimetypes.add_type("application/wasm", ".wasm")
 
 
-def load_state():
-    try:
-        s = json.loads(STATE.read_text())
-    except (OSError, ValueError):
-        s = {}
-    s.setdefault("books", {})
-    s["settings"] = {**DEFAULT_SETTINGS, **s.get("settings", {})}
-    return s
-
-
-def save_state(s):
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(s, indent=1))
-    tmp.replace(STATE)
-
-
 class Leaf(Gtk.Window):
     def __init__(self, book=None):
         super().__init__(title="leaf")
         self.set_default_size(1100, 820)
-        self.state = load_state()
-        self.book = Path(book).resolve() if book else None
+        self.store = Store(DB)
+        if LEGACY_JSON.exists():
+            self.store.import_legacy_json(LEGACY_JSON)
+        self.book = self.book_id = None
+        if book:
+            self.select_book(book)
         self.tap_ready = False
 
         ctx = WebKit2.WebContext.get_default()
@@ -86,7 +77,7 @@ class Leaf(Gtk.Window):
     def bg_rgba(self):
         from gi.repository import Gdk
         c = Gdk.RGBA()
-        c.parse("#1C1C1A" if self.state["settings"]["theme"] == "ink" else "#EEEDE8")
+        c.parse("#1C1C1A" if self.store.settings()["theme"] == "ink" else "#EEEDE8")
         return c
 
     def load(self):
@@ -114,15 +105,14 @@ class Leaf(Gtk.Window):
             req.finish_error(GLib.Error.new_literal(Gio.io_error_quark(), str(e), Gio.IOErrorEnum.NOT_FOUND))
 
     def page_state(self):
-        s = self.state
-        recent = sorted(((p, b) for p, b in s["books"].items() if Path(p).exists()),
-                        key=lambda kv: kv[1].get("opened", 0), reverse=True)
-        out = {"settings": s["settings"],
-               "recent": [{"path": p, "title": b.get("title") or Path(p).stem, "author": b.get("author", ""),
-                           "fraction": b.get("fraction", 0)} for p, b in recent[:30]]}
+        """What the page needs; its shape is the page's API, independent of storage."""
+        out = {"settings": self.store.settings(),
+               "recent": [{"path": b["path"], "title": b["title"] or Path(b["path"]).stem,
+                           "author": b["author"] or "", "fraction": b["fraction"]}
+                          for b in self.store.recent()]}
         if self.book:
-            entry = s["books"].get(str(self.book), {})
-            out["book"] = {"name": self.book.name, "cfi": entry.get("cfi")}
+            row = self.store.book(self.book_id) or {}
+            out["book"] = {"name": self.book.name, "cfi": row.get("cfi")}
         return out
 
     # ── messages from the page ───────────────────────────────────────────────
@@ -133,23 +123,19 @@ class Leaf(Gtk.Window):
         except Exception:
             return
         kind = msg.get("type")
-        s = self.state
-        if kind == "progress" and self.book:
-            e = s["books"].setdefault(str(self.book), {})
-            e.update({k: msg[k] for k in ("cfi", "fraction", "title", "author") if msg.get(k) is not None})
-            e["opened"] = time.time()
-            save_state(s)
+        if kind == "progress" and self.book_id:
+            self.store.save_progress(self.book_id, cfi=msg.get("cfi"), fraction=msg.get("fraction"),
+                                     title=msg.get("title"), author=msg.get("author"))
             self.set_title(f"{msg.get('title') or self.book.stem} · leaf")
         elif kind == "settings":
-            s["settings"].update({k: v for k, v in msg.get("settings", {}).items() if k in DEFAULT_SETTINGS})
-            save_state(s)
+            self.store.set_settings(msg.get("settings", {}))
             self.view.set_background_color(self.bg_rgba())
-        elif kind == "turn" and s["settings"].get("pageSound"):
+        elif kind == "turn" and self.store.settings().get("pageSound"):
             self.tap()
         elif kind == "open" and msg.get("path"):
             self.open_book(msg["path"])
         elif kind == "library":
-            self.book = None
+            self.book = self.book_id = None
             self.set_title("leaf")
             self.load()
         elif kind == "open-dialog":
@@ -157,13 +143,14 @@ class Leaf(Gtk.Window):
         elif kind == "quit":
             self.destroy()
 
+    def select_book(self, path):
+        """Register the file (found again by identity if it moved) and make it current."""
+        row = self.store.open_book(Path(path).expanduser())
+        self.book, self.book_id = Path(row["path"]), row["id"]
+
     def open_book(self, path):
-        p = Path(path).expanduser().resolve()
-        if p.is_file():
-            self.book = p
-            s = self.state
-            s["books"].setdefault(str(p), {})["opened"] = time.time()
-            save_state(s)
+        if Path(path).expanduser().is_file():
+            self.select_book(path)
             self.load()
 
     def open_dialog(self):
