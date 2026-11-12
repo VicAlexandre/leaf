@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=leaf
+GenericName=E-book Reader
+Comment=E-ink EPUB reader (foliate-js)
+Exec=leaf %f
+Icon=accessories-text-editor
+Terminal=false
+Categories=Office;Viewer;Literature;
+MimeType=application/epub+zip;
+StartupWMClass=leaf

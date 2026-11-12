@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- foliate-js requires a strict CSP: EPUB scripts must never run -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self'; style-src 'self' blob: 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' blob: data:; connect-src 'self' blob: data:; frame-src blob: data:; object-src blob: data:; form-action 'none';">
+<link rel="stylesheet" href="app.css">
+<script type="module" src="reader.js"></script>
+</head>
+<body>
+<header><span class="title" id="title">…</span><span class="dim" id="author"></span><span class="grow"></span><span class="dim" id="chapter"></span></header>
+<main id="book">
+  <section class="sheet" id="toc" hidden><h2>CONTENTS</h2><div id="toc-items"></div></section>
+</main>
+<footer>
+  <div class="bar"><i id="progress"></i></div>
+  <span id="percent">0%</span>
+  <span class="dim" id="loc"></span>
+  <span class="grow"></span>
+  <span class="dim" id="keys">←/→ page · t contents · +/- size · d ink · s sound · b library · q quit</span>
+</footer>
+</body>
+</html>
