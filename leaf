@@ -2,6 +2,7 @@
 """leaf: a small e-ink EPUB reader (GTK3 + WebKitGTK, rendering by foliate-js).
 
   leaf [BOOK.epub]     open a book, or the library of recent books
+  leaf --last          bring an open leaf window forward, else reopen the last book
 
 Keys (in the reader): ←/→ h/l space  page · t contents · +/- text size ·
 d paper/ink · s page sound · b library · o open file · q quit
@@ -20,7 +21,15 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-import gi
+def leaf_windows():
+    try:
+        out = subprocess.run(["hyprctl", "-j", "clients"], capture_output=True, text=True).stdout
+        return [c for c in json.loads(out) if c.get("class") == "leaf"]
+    except (OSError, ValueError):
+        return []
+
+
+import gi  # noqa: E402
 gi.require_version("Gtk", "3.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import Gio, GLib, Gtk, WebKit2  # noqa: E402
@@ -198,6 +207,19 @@ def main():
         sys.exit(f"leaf: app files not found under {SHARE} "
                  "(run from a checkout with 'git submodule update --init', or set LEAF_HOME)")
     book = sys.argv[1] if len(sys.argv) > 1 else None
+    if book == "--last":
+        windows = leaf_windows()
+        if windows:                                   # already reading: bring it forward
+            subprocess.run(["hyprctl", "dispatch",
+                            f'hl.dsp.focus({{ window = "address:{windows[0]["address"]}" }})'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        st = Store(DB)
+        if LEGACY_JSON.exists():
+            st.import_legacy_json(LEGACY_JSON)
+        recent = st.recent(1)
+        st.close()
+        book = recent[0]["path"] if recent else None
     if book and not Path(book).is_file():
         sys.exit(f"leaf: no such file: {book}")
     GLib.set_prgname("leaf")          # Wayland app id / window class
